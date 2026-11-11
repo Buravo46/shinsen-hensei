@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#24496f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="真戦編成">
+<title>真戦 編成ノート</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="appbar">
+  <h1 id="title">武将</h1>
+  <span id="dataStatus" class="status"></span>
+</header>
+
+<main id="view"></main>
+
+<nav class="tabbar" id="tabbar">
+  <button data-tab="home" class="on"><span class="ico">⌂</span><span>ホーム</span></button>
+  <button data-tab="generals"><span class="ico">将</span><span>武将</span></button>
+  <button data-tab="tactics"><span class="ico">策</span><span>戦法</span></button>
+  <button data-tab="request"><span class="ico">陣</span><span>依頼</span></button>
+  <button data-tab="settings"><span class="ico">⚙</span><span>設定</span></button>
+</nav>
+
+<div id="sheetBg" class="sheet-bg" hidden></div>
+<section id="sheet" class="sheet" hidden aria-modal="true" role="dialog">
+  <div class="sheet-grip"></div>
+  <div id="sheetBody"></div>
+</section>
+<div id="toast" class="toast" hidden></div>
+
+<input type="file" id="fileInput" accept=".md,text/markdown,text/plain" multiple hidden>
+<input type="file" id="dirInput" webkitdirectory hidden>
+<input type="file" id="jsonInput" accept=".json,application/json" hidden>
+
+<script src="app.js"></script>
+</body>
+</html>

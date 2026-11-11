@@ -1,0 +1,17 @@
+{
+  "name": "真戦 編成ノート",
+  "short_name": "真戦編成",
+  "description": "手持ち武将・戦法を登録して、Claude向けの編成依頼プロンプトを作る",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f2f5f8",
+  "theme_color": "#24496f",
+  "lang": "ja",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
