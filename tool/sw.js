@@ -1,6 +1,6 @@
 // アプリ本体だけをキャッシュしてオフラインで動かす（データは IndexedDB 側）。
 // ファイルを更新したら VERSION を上げる。
-const VERSION = 'shinsen-tool-v9';
+const VERSION = 'shinsen-tool-v13';
 const ASSETS = ['./', './index.html', './app.js', './style.css', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {

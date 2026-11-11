@@ -1,6 +1,6 @@
 'use strict';
 /* 真戦 編成ノート
- * data/*.md（generals.md / tactics.md / traits.md）を読み込み、手持ちを登録して編成依頼プロンプトを作る。
+ * data/*.md（generals.md / tactics.md / traits.md / heigaku.md）を読み込み、手持ちを登録して編成依頼プロンプトを作る。
  * データと手持ちは IndexedDB に保存（使えない環境ではメモリのみ）。 */
 
 // ---------------- 保存 ----------------
@@ -64,7 +64,21 @@ const S = {
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let saveTimer = null;
+const arr = (v) => (v == null || v === '' ? [] : Array.isArray(v) ? v : [v]);
+
+const TITLES = { home: '真戦 編成ノート', generals: '武将', tactics: '戦法', request: '編成依頼', settings: '設定' };
+const HOME_LIMIT = 5;
+const SLOT_LABELS = ['大将', '副将', '副将'];
+const emptySlot = () => ({ name: '', t1: '', t2: '', sys: '', ki: '', sei: '' });
+const conditionExtra = [];
+const isOwnedG = (g) => !!S.owned.generals[g.slug];
+const isOwnedT = (t) => !!S.owned.tactics[t.name];
+const NONE = '-'; // 評価モードの「なし」（未覚醒・兵学未習得など）
+
+// ---------------- 関数（Markdown解析・シーズン・書式チェック・ホーム・武将・戦法・兵学・依頼・設定・シート・起動） ----------------
+
 function saveOwned() { clearTimeout(saveTimer); saveTimer = setTimeout(() => store.set('owned', S.owned), 200); }
+
 function saveReq() { store.set('req', S.req); }
 
 function toast(msg) {
@@ -73,8 +87,6 @@ function toast(msg) {
   clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, 2000);
 }
 
-// ---------------- Markdown 解析 ----------------
-// 「## 名前」+「- 項目: 値」形式。同じ項目が複数あれば配列にする。
 function parseBlocks(text) {
   const out = [];
   let cur = null;
@@ -92,7 +104,6 @@ function parseBlocks(text) {
   }
   return out;
 }
-const arr = (v) => (v == null || v === '' ? [] : Array.isArray(v) ? v : [v]);
 
 function parseStats(s) {
   const o = {};
@@ -153,19 +164,19 @@ function buildData() {
   S.formations = collectFormations();
 }
 
-// 書式チェック（FORMAT.md の必須項目と書き方）。警告があっても読み込みは続ける。
-// ---- シーズン ----
-// 初出が空なら S1 扱い。S.season = { sel: 5, mode: 'upto' | 'only' | 'all' }
 function seasonNum(s) { const m = String(s || '').match(/S(\d+)/); return m ? +m[1] : 1; }
+
 function seasonOk(debut, sel = S.season.sel, mode = S.season.mode) {
   if (mode === 'all') return true;
   const n = seasonNum(debut);
   return mode === 'only' ? n === sel : n <= sel;
 }
+
 function seasonLabel() {
   const s = S.season;
   return s.mode === 'all' ? '全シーズン' : s.mode === 'only' ? `S${s.sel}追加分` : `S${s.sel}まで`;
 }
+
 function openSeasonSheet() {
   const s = S.season;
   const list = Array.from({ length: S.maxSeason }, (_, i) => i + 1);
@@ -189,11 +200,13 @@ function openSeasonSheet() {
   });
   S.onSheetClose = onSeasonChange;
 }
+
 function onSeasonChange() {
   store.set('season', S.season);
   if (S.season.mode !== 'all') { S.req.season = `S${S.season.sel}`; saveReq(); }
   render();
 }
+
 function seasonChip() { return `<button class="chipbtn ${S.season.mode !== 'all' ? 'active' : ''}" data-season="1">${seasonLabel()}</button>`; }
 
 function validate(gk, tk, rk, hk) {
@@ -246,9 +259,6 @@ function validate(gk, tk, rk, hk) {
   return W;
 }
 
-// 各武将の「推奨編成」行を集め、重複を除いた編成リストにする。
-// 行の形: [S5 推奨編成 Tier0] 武将A(戦法1 ＋ 戦法2) + 武将B(...) + 武将C(...)
-// スタダ編成（段階ごとの説明文）は形式が違うので除外。
 function collectFormations() {
   const seen = new Map();
   for (const g of S.generals) {
@@ -273,19 +283,20 @@ function collectFormations() {
   return [...seen.values()].sort((a, b) => b.season - a.season || a.tier - b.tier);
 }
 
-// 手持ちと照らし合わせる
-// 編成の武将・伝授戦法がすべてシーズン n で使えるか
-// （初出が n 以前か、所持している。限定配布などで先のシーズンの武将を持っている場合があるため）
 function availGeneral(g, n) { return !g || isOwnedG(g) || seasonOk(g.debut, n, 'upto'); }
+
 function availTactic(t, n) { return !t || isOwnedT(t) || seasonOk(t.debut, n, 'upto'); }
+
 function formationInSeason(f, n) {
   return f.members.every((m) =>
     m.alts.some((a) => availGeneral(S.nameIndex[a], n)) &&
     m.tactics.every((t) => availTactic(S.tacticIndex[t], n)));
 }
+
 function formationText(f) {
   return `[${f.label}] ` + f.members.map((m) => (m.tactics.length ? `${m.name}(${m.tactics.join(' ＋ ')})` : m.name)).join(' + ');
 }
+
 function formationsOf(g, n) {
   return (S.formations || []).filter((f) => f.members.some((m) => m.alts.includes(g.name)) && (n == null || formationInSeason(f, n)));
 }
@@ -310,12 +321,9 @@ function evalFormation(f) {
 }
 
 function tierRank(t) { const m = String(t).match(/([\d.]+)/); return m ? parseFloat(m[1]) : 99; }
-function troopTypes(g) { return [...String(g.troop).matchAll(/(足軽|騎兵|弓兵|鉄砲|兵器)/g)].map((m) => m[1]); }
-const isOwnedG = (g) => !!S.owned.generals[g.slug];
-const isOwnedT = (t) => !!S.owned.tactics[t.name];
 
-// ---------------- 画面 ----------------
-const TITLES = { home: '真戦 編成ノート', generals: '武将', tactics: '戦法', request: '編成依頼', settings: '設定' };
+function troopTypes(g) { return [...String(g.troop).matchAll(/(足軽|騎兵|弓兵|鉄砲|兵器)/g)].map((m) => m[1]); }
+
 function setTab(tab) {
   S.tab = tab;
   for (const b of document.querySelectorAll('#tabbar button')) b.classList.toggle('on', b.dataset.tab === tab);
@@ -348,8 +356,6 @@ function noDataHtml() {
     <button class="btn" style="max-width:280px;margin:8px auto 0" onclick="loadSample()">サンプルで試す</button></div>`;
 }
 
-// ----- ホーム -----
-const HOME_LIMIT = 5;
 function renderHome(v) {
   const ownedG = S.generals.filter(isOwnedG);
   const ownedT = S.tactics.filter(isOwnedT);
@@ -495,7 +501,6 @@ function formationCard(x, id) {
   </div>`;
 }
 
-// ----- 武将 -----
 function filteredGenerals() {
   const q = S.gq.trim(), f = S.gf;
   return S.generals.filter((g) => {
@@ -514,6 +519,7 @@ function filteredGenerals() {
     return true;
   });
 }
+
 function gFilterCount() { const f = S.gf; return f.star.length + f.faction.length + (f.family || []).length + f.troop.length + f.cost.length + f.tier.length + (f.ownedOnly ? 1 : 0); }
 
 function renderGenerals(v) {
@@ -655,7 +661,6 @@ function openGeneralFilter() {
   S.onSheetClose = () => { if (S.seasonChanged) { S.seasonChanged = false; onSeasonChange(); } else render(); };
 }
 
-// ----- 戦法 -----
 function filteredTactics() {
   const q = S.tq.trim(), f = S.tf;
   return S.tactics.filter((t) => {
@@ -670,16 +675,19 @@ function filteredTactics() {
     return true;
   });
 }
+
 function tacViewSeg() {
   if (!S.heigaku.length) return '';
   return `<div style="padding:10px 16px 0"><div class="seg" id="tView">
     <button data-v="tactics" class="${S.tacView !== 'heigaku' ? 'on' : ''}">伝授戦法</button>
     <button data-v="heigaku" class="${S.tacView === 'heigaku' ? 'on' : ''}">兵学</button></div></div>`;
 }
+
 function bindTacView() {
   const seg = $('#tView'); if (!seg) return;
   seg.onclick = (e) => { const b = e.target.closest('button'); if (!b) return; S.tacView = b.dataset.v; render(); };
 }
+
 function renderTactics(v) {
   if (S.tacView === 'heigaku' && S.heigaku.length) { renderHeigaku(v); return; }
   const kinds = ['能動', '受動', '指揮', '突撃', '兵種', '陣形', '事件'];
@@ -706,6 +714,7 @@ function renderTactics(v) {
   });
   drawTacticList();
 }
+
 function tacticCard(t) {
   const o = isOwnedT(t);
   return `<div class="card ${o ? 'owned' : ''}" data-tac="${esc(t.name)}">
@@ -718,12 +727,13 @@ function tacticCard(t) {
     <button class="own-btn ${o ? 'on' : ''}" data-owntac="${esc(t.name)}">${o ? '所持' : '未所持'}</button>
   </div>`;
 }
+
 function drawTacticList() {
   const list = filteredTactics();
   $('#tsum').textContent = `${list.length} / ${S.tactics.length} 件`;
   $('#tlist').innerHTML = list.length ? list.map(tacticCard).join('') : '<div class="empty">該当する戦法がありません</div>';
 }
-// ----- 兵学 -----
+
 function filteredHeigaku() {
   const q = S.hq.trim(), f = S.hf;
   return S.heigaku.filter((h) => {
@@ -737,6 +747,7 @@ function filteredHeigaku() {
     return true;
   });
 }
+
 function renderHeigaku(v) {
   const f = S.hf;
   const systems = [...new Set(S.heigaku.map((h) => h.system).filter(Boolean))];
@@ -761,6 +772,7 @@ function renderHeigaku(v) {
   });
   drawHeigakuList();
 }
+
 function drawHeigakuList() {
   const list = filteredHeigaku();
   $('#hsum').textContent = `${list.length} / ${S.heigaku.length} 件`;
@@ -788,10 +800,12 @@ function openTacticDetail(name) {
     <div class="btn-row"><button class="btn ${o ? '' : 'primary'}" id="tToggle">${o ? '未所持にする' : '所持にする'}</button><button class="btn" onclick="closeSheet()">閉じる</button></div>`);
   $('#tToggle').addEventListener('click', () => { toggleOwnTactic(name); openTacticDetail(name); refreshList(); });
 }
+
 function toggleOwnTactic(name) {
   if (S.owned.tactics[name]) delete S.owned.tactics[name]; else S.owned.tactics[name] = true;
   saveOwned();
 }
+
 function refreshList() {
   updateStatus();
   if (S.tab === 'home') renderHome($('#view'));
@@ -799,9 +813,8 @@ function refreshList() {
   if (S.tab === 'tactics' && $('#tlist')) drawTacticList();
 }
 
-// ----- 編成依頼 -----
-// 依頼に使う手持ち（所持していればシーズンに関係なく含める。限定配布などがあるため）
 function reqSeasonNum() { return seasonNum(S.req.season); }
+
 function ownedForReq(ignoreBind) {
   const n = reqSeasonNum();
   const k = bindKey(), val = S.req.bindValue;
@@ -811,16 +824,18 @@ function ownedForReq(ignoreBind) {
     t: S.tactics.filter((t) => isOwnedT(t)),
   };
 }
-// ---- 勢力・家門の縛り ----
+
 function bindKey() { return S.req.bind === 'faction' ? 'faction' : S.req.bind === 'family' ? 'family' : null; }
+
 function bindLabel() { return S.req.bind === 'faction' ? '勢力' : '家門'; }
-// 依頼シーズンで使える手持ちを、勢力/家門ごとに数える
+
 function bindGroups() {
   const k = bindKey(); if (!k) return [];
   const cnt = {};
   for (const g of ownedForReq(true).g) if (g[k]) cnt[g[k]] = (cnt[g[k]] || 0) + 1;
   return Object.entries(cnt).sort((a, b) => b[1] - a[1]);
 }
+
 function bindPickerHtml() {
   const k = bindKey(); if (!k) return '';
   const r = S.req, groups = bindGroups();
@@ -840,12 +855,11 @@ function bindPickerHtml() {
     </select><p class="note">${note}</p>`;
 }
 
-// ---- 編成を指定して戦法・兵学だけ考える ----
-const SLOT_LABELS = ['大将', '副将', '副将'];
 function fixedSquads() {
   if (!Array.isArray(S.req.fixed) || !S.req.fixed.length) S.req.fixed = [['', '', '']];
   return S.req.fixed;
 }
+
 function fixedSquadsHtml(ownedG) {
   const squads = fixedSquads();
   const used = {};
@@ -867,25 +881,28 @@ function fixedSquadsHtml(ownedG) {
       ${slots}
       ${warn.length ? `<p class="note miss">${esc([...new Set(warn)].join('、'))} が複数の部隊に入っています</p>` : ''}
       ${gs.length && gs.length < 3 ? `<p class="note miss">3人そろっていません（${gs.length}人）</p>` : ''}
-      ${squads.length > 1 ? `<button class="btn" data-fxdel="${i}" style="min-height:38px">この部隊を削除</button>` : ''}
+      <button class="btn" data-fxdel="${i}" style="min-height:38px">${squads.length > 1 ? 'この部隊を削除' : 'この部隊を空にする'}</button>
     </div>`;
   }).join('');
   return `${cards}<button class="btn" id="fxAdd">＋ 部隊を追加</button>`;
 }
 
-// ---- 今の編成を評価してもらう ----
-const emptySlot = () => ({ name: '', t1: '', t2: '', sys: '', ki: '', sei: '' });
 function evalSquads() {
   if (!Array.isArray(S.req.evalSquads) || !S.req.evalSquads.length) S.req.evalSquads = [[emptySlot(), emptySlot(), emptySlot()]];
   return S.req.evalSquads;
 }
+
 function evalSquadsHtml(ownedG, ownedT) {
   const squads = evalSquads();
   const systems = [...new Set(S.heigaku.map((h) => h.system).filter(Boolean))];
   // 同じ武将・戦法の重複チェック
   const cntG = {}, cntT = {};
-  squads.flat().forEach((s) => { if (s.name) cntG[s.name] = (cntG[s.name] || 0) + 1; [s.t1, s.t2].forEach((t) => { if (t) cntT[t] = (cntT[t] || 0) + 1; }); });
-  const opt = (list, cur, label) => `<option value="">${label}</option>` + list.map((x) => `<option value="${esc(x)}" ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('');
+  const isSet = (t) => t && t !== NONE;
+  squads.flat().forEach((s) => { if (s.name) cntG[s.name] = (cntG[s.name] || 0) + 1; [s.t1, s.t2].forEach((t) => { if (isSet(t)) cntT[t] = (cntT[t] || 0) + 1; }); });
+  // noneLabel を渡すと「－（なし）」の選択肢を加える（未覚醒・兵学未習得など）
+  const opt = (list, cur, label, noneLabel) => `<option value="">${label}</option>` +
+    (noneLabel ? `<option value="${NONE}" ${cur === NONE ? 'selected' : ''}>－（${noneLabel}）</option>` : '') +
+    list.map((x) => `<option value="${esc(x)}" ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('');
   const tacNames = ownedT.map((t) => t.name);
   const cards = squads.map((sq, i) => {
     const gs = sq.map((s) => S.nameIndex[s.name]).filter(Boolean);
@@ -896,19 +913,19 @@ function evalSquadsHtml(ownedG, ownedT) {
         <div class="field" style="margin:4px 0"><label>${SLOT_LABELS[j]}</label>
           <select class="select" data-ev="${i}-${j}-name">${opt(ownedG.map((g) => g.name), s.name, '（武将を選ぶ）')}</select></div>
         <div class="btn-row" style="margin-top:4px">
-          <select class="select" data-ev="${i}-${j}-t1">${opt(tacNames, s.t1, '伝授戦法1')}</select>
-          <select class="select" data-ev="${i}-${j}-t2">${opt(tacNames, s.t2, '伝授戦法2')}</select>
+          <select class="select" data-ev="${i}-${j}-t1">${opt(tacNames, s.t1, '伝授戦法1', 'なし')}</select>
+          <select class="select" data-ev="${i}-${j}-t2">${opt(tacNames, s.t2, '伝授戦法2', 'なし・未覚醒')}</select>
         </div>
         ${S.heigaku.length ? `<div class="btn-row" style="margin-top:6px">
-          <select class="select" data-ev="${i}-${j}-sys">${opt(systems, s.sys, '兵学の系統')}</select>
-          <select class="select" data-ev="${i}-${j}-ki">${opt(kiList, s.ki, '兵学・奇')}</select>
+          <select class="select" data-ev="${i}-${j}-sys">${opt(systems, s.sys, '兵学の系統', '兵学なし')}</select>
+          ${s.sys === NONE ? '' : `<select class="select" data-ev="${i}-${j}-ki">${opt(kiList, s.ki, '兵学・奇', 'なし')}</select>`}
         </div>
-        <input class="input" style="margin-top:6px" data-ev="${i}-${j}-sei" value="${esc(s.sei)}" placeholder="兵学・正（例: 剛力2 豪勇1）">` : ''}
+        ${s.sys === NONE ? '' : `<input class="input" style="margin-top:6px" data-ev="${i}-${j}-sei" value="${esc(s.sei)}" placeholder="兵学・正（例: 剛力2 豪勇1）">`}` : ''}
       </div>`;
     }).join('');
     const dupG = sq.filter((s) => s.name && cntG[s.name] > 1).map((s) => s.name);
-    const dupT = sq.flatMap((s) => [s.t1, s.t2]).filter((t) => t && cntT[t] > 1);
-    const sameInSlot = sq.filter((s) => s.t1 && s.t1 === s.t2).map((s) => s.name || '（未選択）');
+    const dupT = sq.flatMap((s) => [s.t1, s.t2]).filter((t) => isSet(t) && cntT[t] > 1);
+    const sameInSlot = sq.filter((s) => isSet(s.t1) && s.t1 === s.t2).map((s) => s.name || '（未選択）');
     const warns = [];
     if (dupG.length) warns.push(`${[...new Set(dupG)].join('、')} が複数の部隊に入っています`);
     if (dupT.length) warns.push(`戦法 ${[...new Set(dupT)].join('、')} が複数か所で使われています`);
@@ -917,7 +934,7 @@ function evalSquadsHtml(ownedG, ownedT) {
       <div class="fcard-head"><b style="color:var(--text)">第${i + 1}部隊</b><span>COST ${cost}</span></div>
       ${slots}
       ${warns.map((w) => `<p class="note miss">${esc(w)}</p>`).join('')}
-      ${squads.length > 1 ? `<button class="btn" data-evdel="${i}" style="min-height:38px;margin-top:8px">この部隊を削除</button>` : ''}
+      <button class="btn" data-evdel="${i}" style="min-height:38px;margin-top:8px">${squads.length > 1 ? 'この部隊を削除' : 'この部隊を空にする'}</button>
     </div>`;
   }).join('');
   return `${cards}<button class="btn" id="evAdd">＋ 部隊を追加</button>`;
@@ -942,6 +959,7 @@ function renderRequest(v) {
         : fixedMode ? '武将の組み合わせを自分で決めて、伝授戦法と兵学だけを提案してもらいます。'
         : '手持ちの中から、武将の組み合わせも含めて編成を提案してもらいます。'}</p>
       <p class="note">${esc(r.season)}の依頼です。所持している武将 ${ownedG.length} 名・伝授戦法 ${ownedT.length} 件が対象です（限定武将など、初出が後のシーズンでも所持していれば含めます）。${ownedG.length ? '' : '<br>先に武将タブで所持を登録してください。'}</p>
+      <button class="btn" id="rReset" style="min-height:40px;margin-top:6px">${evalMode ? '評価の入力' : fixedMode ? '部隊の指定' : '編成の条件'}を初期化</button>
     </div>
     ${fixedMode || evalMode ? `<div class="section">
       <h2>条件</h2>
@@ -1010,11 +1028,27 @@ function renderRequest(v) {
   };
   modeNote();
   $('#rKind').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; r.kind = b.dataset.k; saveReq(); renderRequest(v); };
+  // 今の種類の入力だけを初期化する（目的・シーズン・出力の形式は残す）
+  $('#rReset').onclick = () => {
+    const label = evalMode ? '評価の入力（部隊・戦法・兵学）' : fixedMode ? '部隊の指定' : '編成の条件（部隊数・必須/除外武将・縛り・COST上限）';
+    if (!confirm(`${label}とその他の要望を初期化します。よろしいですか？`)) return;
+    if (evalMode) r.evalSquads = [[emptySlot(), emptySlot(), emptySlot()]];
+    else if (fixedMode) r.fixed = [['', '', '']];
+    else Object.assign(r, { squads: 1, must: [], exclude: [], costMax: '', bind: 'none', bindValue: '' });
+    r.extra = '';
+    saveReq(); renderRequest(v); toast('初期化しました');
+  };
   if (fixedMode) {
     v.querySelectorAll('[data-fx]').forEach((sel) => {
       sel.onchange = () => { const [i, j] = sel.dataset.fx.split('-').map(Number); fixedSquads()[i][j] = sel.value; saveReq(); renderRequest(v); };
     });
-    v.querySelectorAll('[data-fxdel]').forEach((b) => { b.onclick = () => { fixedSquads().splice(+b.dataset.fxdel, 1); saveReq(); renderRequest(v); }; });
+    v.querySelectorAll('[data-fxdel]').forEach((b) => {
+      b.onclick = () => {
+        const sq = fixedSquads();
+        if (sq.length > 1) sq.splice(+b.dataset.fxdel, 1); else sq[0] = ['', '', ''];
+        saveReq(); renderRequest(v);
+      };
+    });
     $('#fxAdd').onclick = () => { fixedSquads().push(['', '', '']); saveReq(); renderRequest(v); };
   } else if (evalMode) {
     v.querySelectorAll('[data-ev]').forEach((el) => {
@@ -1028,7 +1062,13 @@ function renderRequest(v) {
       if (el.tagName === 'INPUT') el.oninput = apply; // 兵学・正は入力中に再描画しない
       else el.onchange = () => { apply(); renderRequest(v); };
     });
-    v.querySelectorAll('[data-evdel]').forEach((b) => { b.onclick = () => { evalSquads().splice(+b.dataset.evdel, 1); saveReq(); renderRequest(v); }; });
+    v.querySelectorAll('[data-evdel]').forEach((b) => {
+      b.onclick = () => {
+        const sq = evalSquads();
+        if (sq.length > 1) sq.splice(+b.dataset.evdel, 1); else sq[0] = [emptySlot(), emptySlot(), emptySlot()];
+        saveReq(); renderRequest(v);
+      };
+    });
     $('#evAdd').onclick = () => { evalSquads().push([emptySlot(), emptySlot(), emptySlot()]); saveReq(); renderRequest(v); };
     $('#rImprove').onchange = (e) => { r.evalImprove = e.target.checked; saveReq(); };
   } else {
@@ -1072,7 +1112,6 @@ function renderRequest(v) {
   };
 }
 
-// 依頼シーズンより後に登場したのに所持しているもの（限定配布など）があれば、使えると明記する
 function lateOwnedLine() {
   const n = reqSeasonNum();
   const late = [...S.generals.filter((g) => isOwnedG(g) && seasonNum(g.debut) > n).map((g) => g.name),
@@ -1100,9 +1139,7 @@ function conditionLines() {
   L.push(...conditionExtra.splice(0));
   return L;
 }
-const conditionExtra = [];
 
-// 武将1人分の説明（SKILLなしで埋め込む用）
 function generalBlock(g, withForms, role) {
   const L = [];
   const tot = S.owned.generals[g.slug] ? S.owned.generals[g.slug].totsu || 0 : 0;
@@ -1122,6 +1159,7 @@ function generalBlock(g, withForms, role) {
   }
   return L;
 }
+
 function tacticAndHeigakuLines(ownedT, useHeigaku) {
   const L = ['', `## 手持ち伝授戦法（${ownedT.length}件）`];
   for (const t of ownedT) L.push(`- ${t.name}（${t.rank}・${t.kind}）: ${t.effect}`);
@@ -1132,7 +1170,6 @@ function tacticAndHeigakuLines(ownedT, useHeigaku) {
   return L;
 }
 
-// 編成を指定して、伝授戦法と兵学だけを考えてもらうプロンプト
 function buildFixedPrompt() {
   const r = S.req;
   const ownedT = ownedForReq().t;
@@ -1175,13 +1212,14 @@ function buildFixedPrompt() {
   return L.join('\n');
 }
 
-// 今の編成を評価してもらうプロンプト
 function heigakuText(s, withEffect) {
+  if (s.sys === NONE) return 'なし（未習得）';
   if (!s.sys && !s.ki && !s.sei) return '';
-  const ki = s.ki ? S.heigaku.find((h) => h.name === s.ki) : null;
+  const ki = s.ki && s.ki !== NONE ? S.heigaku.find((h) => h.name === s.ki) : null;
   const parts = [];
   if (s.sys) parts.push(s.sys);
-  if (s.ki) parts.push(`奇 ${s.ki}${withEffect && ki ? '（' + ki.effect + '）' : ''}`);
+  if (s.ki === NONE) parts.push('奇 なし');
+  else if (s.ki) parts.push(`奇 ${s.ki}${withEffect && ki ? '（' + ki.effect + '）' : ''}`);
   if (s.sei) {
     let sei = s.sei.trim();
     if (withEffect) {
@@ -1195,16 +1233,22 @@ function heigakuText(s, withEffect) {
   }
   return parts.join(' / ');
 }
+
 function buildEvalPrompt() {
   const r = S.req;
   const own = ownedForReq();
   const improve = r.evalImprove !== false;
   const useHeigaku = r.withHeigaku && S.heigaku.length && reqSeasonNum() >= 2;
   const squads = evalSquads().map((sq) => sq.filter((s) => S.nameIndex[s.name])).filter((sq) => sq.length);
-  const used = new Set(squads.flat().flatMap((s) => [s.name, s.t1, s.t2]).filter(Boolean));
+  const used = new Set(squads.flat().flatMap((s) => [s.name, s.t1, s.t2]).filter((x) => x && x !== NONE));
   const cond = [`- 目的: ${r.purpose}`, `- シーズン: ${r.season}`];
   if (r.extra.trim()) cond.push(`- 補足: ${r.extra.trim()}`);
   cond.push(...lateOwnedLine());
+  // 「なし」がある場合は、その枠は埋められない前提で評価してもらう
+  const hasNone = squads.flat().some((s) => [s.t1, s.t2, s.sys, s.ki].includes(NONE));
+  if (hasNone) cond.push('- 「なし」と書いた枠（未覚醒で伝授戦法の枠がない、兵学を未習得など）は、今は埋められない前提で評価する。改善案でもその枠には足さない');
+  // 伝授戦法1枠の表示（空=未設定、NONE=なし）
+  const tacSlot = (t) => (t === NONE ? 'なし' : t || '未設定');
   const ask = [
     '部隊ごとに次を書いてください。',
     '1. 総合評価（10点満点）と、ひとことでの位置づけ',
@@ -1223,7 +1267,7 @@ function buildEvalPrompt() {
       L.push(`### 第${i + 1}部隊`);
       sq.forEach((s, j) => {
         const g = S.nameIndex[s.name];
-        const tac = [s.t1, s.t2].filter(Boolean).join(' ＋ ') || '（未設定）';
+        const tac = !s.t1 && !s.t2 ? '（未設定）' : `${tacSlot(s.t1)} ＋ ${tacSlot(s.t2)}`;
         const hg = heigakuText(s, false);
         L.push(`- ${SLOT_LABELS[j]} ${g.name}(${(S.owned.generals[g.slug] || {}).totsu || 0}): ${tac}${hg ? ' ／ 兵学: ' + hg : ''}`);
       });
@@ -1254,6 +1298,7 @@ function buildEvalPrompt() {
       L.push(...generalBlock(g, false, SLOT_LABELS[j]));
       for (const tn of [s.t1, s.t2]) {
         if (!tn) continue;
+        if (tn === NONE) { L.push('- 伝授戦法: なし（枠が空いている）'); continue; }
         const t = S.tacticIndex[tn];
         L.push(`- 伝授戦法 ${tn}${t ? `（${t.rank}・${t.kind}）: ${t.effect}` : ''}`);
       }
@@ -1340,7 +1385,6 @@ function buildPrompt() {
   return L.join('\n');
 }
 
-// ----- 設定 -----
 function renderSettings(v) {
   const names = Object.keys(S.files);
   v.innerHTML = `
@@ -1419,7 +1463,6 @@ async function loadFiles(fileList) {
   render();
 }
 
-// templates/ の架空データを読み込む（GitHub Pages やローカルサーバーで開いたときに使える）
 async function loadSample() {
   if (S.generals.length && !confirm('今のデータをサンプル（架空の武将4名）に置き換えます。手持ちの登録は残ります。よろしいですか？')) return;
   try {
@@ -1459,12 +1502,12 @@ async function importJson(file) {
   } catch (e) { toast('読み込めませんでした: ' + e.message); }
 }
 
-// ---------------- シート ----------------
 function openSheet(html) {
   $('#sheetBody').innerHTML = html;
   $('#sheet').hidden = false; $('#sheetBg').hidden = false;
   document.body.style.overflow = 'hidden';
 }
+
 function closeSheet() {
   $('#sheet').hidden = true; $('#sheetBg').hidden = true;
   document.body.style.overflow = '';
@@ -1473,9 +1516,7 @@ function closeSheet() {
   const b = $('#sheetBody'); b.replaceWith(Object.assign(document.createElement('div'), { id: 'sheetBody' }));
   if (fn) fn();
 }
-window.setTab = setTab; window.closeSheet = closeSheet; window.loadSample = loadSample;
 
-// ---------------- 起動 ----------------
 async function init() {
   $('#tabbar').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setTab(b.dataset.tab); });
   $('#sheetBg').addEventListener('click', closeSheet);
@@ -1506,4 +1547,7 @@ async function init() {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 }
+
+window.setTab = setTab; window.closeSheet = closeSheet; window.loadSample = loadSample;
+
 init();
