@@ -274,11 +274,14 @@ function collectFormations() {
 }
 
 // 手持ちと照らし合わせる
-// 編成の武将・伝授戦法がすべてシーズン n までに登場しているか
+// 編成の武将・伝授戦法がすべてシーズン n で使えるか
+// （初出が n 以前か、所持している。限定配布などで先のシーズンの武将を持っている場合があるため）
+function availGeneral(g, n) { return !g || isOwnedG(g) || seasonOk(g.debut, n, 'upto'); }
+function availTactic(t, n) { return !t || isOwnedT(t) || seasonOk(t.debut, n, 'upto'); }
 function formationInSeason(f, n) {
   return f.members.every((m) =>
-    m.alts.some((a) => !S.nameIndex[a] || seasonOk(S.nameIndex[a].debut, n, 'upto')) &&
-    m.tactics.every((t) => !S.tacticIndex[t] || seasonOk(S.tacticIndex[t].debut, n, 'upto')));
+    m.alts.some((a) => availGeneral(S.nameIndex[a], n)) &&
+    m.tactics.every((t) => availTactic(S.tacticIndex[t], n)));
 }
 function formationText(f) {
   return `[${f.label}] ` + f.members.map((m) => (m.tactics.length ? `${m.name}(${m.tactics.join(' ＋ ')})` : m.name)).join(' + ');
@@ -497,7 +500,7 @@ function filteredGenerals() {
   const q = S.gq.trim(), f = S.gf;
   return S.generals.filter((g) => {
     if (f.ownedOnly && !isOwnedG(g)) return false;
-    if (!seasonOk(g.debut)) return false;
+    if (!isOwnedG(g) && !seasonOk(g.debut)) return false; // 所持していればシーズンに関係なく表示
     if (f.star.length && !f.star.includes(g.star)) return false;
     if (f.faction.length && !f.faction.includes(g.faction)) return false;
     if (f.family && f.family.length && !f.family.includes(g.family)) return false;
@@ -657,7 +660,7 @@ function filteredTactics() {
   const q = S.tq.trim(), f = S.tf;
   return S.tactics.filter((t) => {
     if (f.ownedOnly && !isOwnedT(t)) return false;
-    if (!seasonOk(t.debut)) return false;
+    if (!isOwnedT(t) && !seasonOk(t.debut)) return false;
     if (f.rank.length && !f.rank.includes(t.rank)) return false;
     if (f.kind.length && !f.kind.some((k) => (k === '事件' ? t.source.includes('事件') : t.kind.includes(k)))) return false;
     if (q) {
@@ -797,15 +800,15 @@ function refreshList() {
 }
 
 // ----- 編成依頼 -----
-// 依頼のシーズンで使える手持ち（初出がそのシーズン以前のもの）
+// 依頼に使う手持ち（所持していればシーズンに関係なく含める。限定配布などがあるため）
 function reqSeasonNum() { return seasonNum(S.req.season); }
 function ownedForReq(ignoreBind) {
   const n = reqSeasonNum();
   const k = bindKey(), val = S.req.bindValue;
   return {
     // 勢力/家門を指定した場合は、その武将だけを送る
-    g: S.generals.filter((g) => isOwnedG(g) && seasonOk(g.debut, n, 'upto') && (ignoreBind || !k || !val || g[k] === val)),
-    t: S.tactics.filter((t) => isOwnedT(t) && seasonOk(t.debut, n, 'upto')),
+    g: S.generals.filter((g) => isOwnedG(g) && (ignoreBind || !k || !val || g[k] === val)),
+    t: S.tactics.filter((t) => isOwnedT(t)),
   };
 }
 // ---- 勢力・家門の縛り ----
@@ -884,7 +887,7 @@ function renderRequest(v) {
         <button data-k="fixed" class="${fixedMode ? 'on' : ''}">戦法・兵学だけ</button>
       </div>
       <p class="note">${fixedMode ? '武将の組み合わせを自分で決めて、伝授戦法と兵学だけを提案してもらいます。' : '手持ちの中から、武将の組み合わせも含めて提案してもらいます。'}</p>
-      <p class="note">${esc(r.season)}で使える武将 ${ownedG.length} 名・伝授戦法 ${ownedT.length} 件が対象です（初出が${esc(r.season)}より後のものは除きます）。${ownedG.length ? '' : '<br>先に武将タブで所持を登録してください。'}</p>
+      <p class="note">${esc(r.season)}の依頼です。所持している武将 ${ownedG.length} 名・伝授戦法 ${ownedT.length} 件が対象です（限定武将など、初出が後のシーズンでも所持していれば含めます）。${ownedG.length ? '' : '<br>先に武将タブで所持を登録してください。'}</p>
     </div>
     ${fixedMode ? `<div class="section">
       <h2>条件</h2>
@@ -999,6 +1002,14 @@ function renderRequest(v) {
   };
 }
 
+// 依頼シーズンより後に登場したのに所持しているもの（限定配布など）があれば、使えると明記する
+function lateOwnedLine() {
+  const n = reqSeasonNum();
+  const late = [...S.generals.filter((g) => isOwnedG(g) && seasonNum(g.debut) > n).map((g) => g.name),
+    ...S.tactics.filter((t) => isOwnedT(t) && seasonNum(t.debut) > n).map((t) => t.name)];
+  return late.length ? [`- ${late.join('、')} は${S.req.season}より後のシーズンで登場したものですが、限定配布などで所持しているので使えます`] : [];
+}
+
 function conditionLines() {
   const r = S.req;
   const L = [];
@@ -1015,6 +1026,7 @@ function conditionLines() {
       : `- 縛り: 各部隊の武将3名を同じ${lab}でそろえる（${lab}は部隊ごとに違ってよい。手持ちの「${lab}」欄で判定）`);
   }
   if (r.extra.trim()) L.push(`- その他の要望: ${r.extra.trim()}`);
+  L.push(...lateOwnedLine());
   L.push(...conditionExtra.splice(0));
   return L;
 }
@@ -1059,6 +1071,7 @@ function buildFixedPrompt() {
   const roleOf = (i) => SLOT_LABELS[i];
   const cond = [`- 目的: ${r.purpose}`, `- シーズン: ${r.season}`];
   if (r.extra.trim()) cond.push(`- その他の要望: ${r.extra.trim()}`);
+  cond.push(...lateOwnedLine());
   const L = [];
   if (r.mode === 'skill') {
     L.push('shinsen-formation スキルを使って、下の部隊の伝授戦法を提案してください。');
