@@ -873,23 +873,77 @@ function fixedSquadsHtml(ownedG) {
   return `${cards}<button class="btn" id="fxAdd">＋ 部隊を追加</button>`;
 }
 
+// ---- 今の編成を評価してもらう ----
+const emptySlot = () => ({ name: '', t1: '', t2: '', sys: '', ki: '', sei: '' });
+function evalSquads() {
+  if (!Array.isArray(S.req.evalSquads) || !S.req.evalSquads.length) S.req.evalSquads = [[emptySlot(), emptySlot(), emptySlot()]];
+  return S.req.evalSquads;
+}
+function evalSquadsHtml(ownedG, ownedT) {
+  const squads = evalSquads();
+  const systems = [...new Set(S.heigaku.map((h) => h.system).filter(Boolean))];
+  // 同じ武将・戦法の重複チェック
+  const cntG = {}, cntT = {};
+  squads.flat().forEach((s) => { if (s.name) cntG[s.name] = (cntG[s.name] || 0) + 1; [s.t1, s.t2].forEach((t) => { if (t) cntT[t] = (cntT[t] || 0) + 1; }); });
+  const opt = (list, cur, label) => `<option value="">${label}</option>` + list.map((x) => `<option value="${esc(x)}" ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('');
+  const tacNames = ownedT.map((t) => t.name);
+  const cards = squads.map((sq, i) => {
+    const gs = sq.map((s) => S.nameIndex[s.name]).filter(Boolean);
+    const cost = gs.reduce((a, g) => a + (+g.cost || 0), 0);
+    const slots = sq.map((s, j) => {
+      const kiList = S.heigaku.filter((h) => h.kind === '奇' && (!s.sys || h.system === s.sys)).map((h) => h.name);
+      return `<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px">
+        <div class="field" style="margin:4px 0"><label>${SLOT_LABELS[j]}</label>
+          <select class="select" data-ev="${i}-${j}-name">${opt(ownedG.map((g) => g.name), s.name, '（武将を選ぶ）')}</select></div>
+        <div class="btn-row" style="margin-top:4px">
+          <select class="select" data-ev="${i}-${j}-t1">${opt(tacNames, s.t1, '伝授戦法1')}</select>
+          <select class="select" data-ev="${i}-${j}-t2">${opt(tacNames, s.t2, '伝授戦法2')}</select>
+        </div>
+        ${S.heigaku.length ? `<div class="btn-row" style="margin-top:6px">
+          <select class="select" data-ev="${i}-${j}-sys">${opt(systems, s.sys, '兵学の系統')}</select>
+          <select class="select" data-ev="${i}-${j}-ki">${opt(kiList, s.ki, '兵学・奇')}</select>
+        </div>
+        <input class="input" style="margin-top:6px" data-ev="${i}-${j}-sei" value="${esc(s.sei)}" placeholder="兵学・正（例: 剛力2 豪勇1）">` : ''}
+      </div>`;
+    }).join('');
+    const dupG = sq.filter((s) => s.name && cntG[s.name] > 1).map((s) => s.name);
+    const dupT = sq.flatMap((s) => [s.t1, s.t2]).filter((t) => t && cntT[t] > 1);
+    const sameInSlot = sq.filter((s) => s.t1 && s.t1 === s.t2).map((s) => s.name || '（未選択）');
+    const warns = [];
+    if (dupG.length) warns.push(`${[...new Set(dupG)].join('、')} が複数の部隊に入っています`);
+    if (dupT.length) warns.push(`戦法 ${[...new Set(dupT)].join('、')} が複数か所で使われています`);
+    if (sameInSlot.length) warns.push(`${sameInSlot.join('、')} に同じ戦法が2つ入っています`);
+    return `<div class="fcard">
+      <div class="fcard-head"><b style="color:var(--text)">第${i + 1}部隊</b><span>COST ${cost}</span></div>
+      ${slots}
+      ${warns.map((w) => `<p class="note miss">${esc(w)}</p>`).join('')}
+      ${squads.length > 1 ? `<button class="btn" data-evdel="${i}" style="min-height:38px;margin-top:8px">この部隊を削除</button>` : ''}
+    </div>`;
+  }).join('');
+  return `${cards}<button class="btn" id="evAdd">＋ 部隊を追加</button>`;
+}
+
 function renderRequest(v) {
   const r = S.req;
   const { g: ownedG, t: ownedT } = ownedForReq();
   const fixedMode = r.kind === 'fixed';
+  const evalMode = r.kind === 'eval';
   const chipList = (key) => r[key].map((n) => `<button class="chip on" data-rm="${key}" data-v="${esc(n)}">${esc(n)} ✕</button>`).join('');
   const options = ownedG.map((g) => `<option value="${esc(g.name)}">${esc(g.name)}</option>`).join('');
   v.innerHTML = `
     <div class="section">
       <h2>依頼の種類</h2>
       <div class="seg" id="rKind">
-        <button data-k="build" class="${!fixedMode ? 'on' : ''}">編成から考える</button>
-        <button data-k="fixed" class="${fixedMode ? 'on' : ''}">戦法・兵学だけ</button>
+        <button data-k="build" class="${!fixedMode && !evalMode ? 'on' : ''}">編成</button>
+        <button data-k="fixed" class="${fixedMode ? 'on' : ''}">戦法・兵学</button>
+        <button data-k="eval" class="${evalMode ? 'on' : ''}">評価</button>
       </div>
-      <p class="note">${fixedMode ? '武将の組み合わせを自分で決めて、伝授戦法と兵学だけを提案してもらいます。' : '手持ちの中から、武将の組み合わせも含めて提案してもらいます。'}</p>
+      <p class="note">${evalMode ? '今の編成（武将・伝授戦法・兵学）を入力して、評価と改善案を出してもらいます。'
+        : fixedMode ? '武将の組み合わせを自分で決めて、伝授戦法と兵学だけを提案してもらいます。'
+        : '手持ちの中から、武将の組み合わせも含めて編成を提案してもらいます。'}</p>
       <p class="note">${esc(r.season)}の依頼です。所持している武将 ${ownedG.length} 名・伝授戦法 ${ownedT.length} 件が対象です（限定武将など、初出が後のシーズンでも所持していれば含めます）。${ownedG.length ? '' : '<br>先に武将タブで所持を登録してください。'}</p>
     </div>
-    ${fixedMode ? `<div class="section">
+    ${fixedMode || evalMode ? `<div class="section">
       <h2>条件</h2>
       <div class="field"><label>目的</label>
         <select class="select" id="rPurpose">
@@ -898,11 +952,11 @@ function renderRequest(v) {
       <div class="field"><label>シーズン</label>
         <div class="seg" id="rSeason">${Array.from({ length: S.maxSeason }, (_, i) => `S${i + 1}`).map((s) => `<button data-s="${s}" class="${r.season === s ? 'on' : ''}">${s}</button>`).join('')}</div></div>
       <div class="field"><label>その他の要望（自由記述）</label>
-        <textarea class="textarea" id="rExtra" placeholder="例: 第1部隊は回復を厚めに。乱世の華は第2部隊で使いたい。">${esc(r.extra)}</textarea></div>
+        <textarea class="textarea" id="rExtra" placeholder="${evalMode ? "例: 相手は鉄砲の計略編成が多い。第1部隊の火力が足りない気がする。" : "例: 第1部隊は回復を厚めに。乱世の華は第2部隊で使いたい。"}">${esc(r.extra)}</textarea></div>
     </div>
     <div class="section">
-      <h2>部隊（武将は固定）</h2>
-      ${fixedSquadsHtml(ownedG)}
+      <h2>${evalMode ? "評価してほしい編成" : "部隊（武将は固定）"}</h2>
+      ${evalMode ? evalSquadsHtml(ownedG, ownedT) : fixedSquadsHtml(ownedG)}
     </div>` : `<div class="section">
       <h2>条件</h2>
       <div class="field"><label>部隊数</label>
@@ -938,7 +992,8 @@ function renderRequest(v) {
       </div>
       <p class="note" id="modeNote"></p>
       <label class="check" id="formsRow"><input type="checkbox" id="rForms" ${r.withForms ? 'checked' : ''}> データの推奨編成も含める</label>
-      ${S.heigaku.length ? `<label class="check"><input type="checkbox" id="rHeigaku" ${r.withHeigaku ? 'checked' : ''}> 兵学の割り当ても提案してもらう（S2以降）</label>` : ''}
+      ${evalMode ? `<label class="check"><input type="checkbox" id="rImprove" ${r.evalImprove !== false ? 'checked' : ''}> 手持ちを使った改善案も出してもらう</label>` : ''}
+      ${S.heigaku.length ? `<label class="check"><input type="checkbox" id="rHeigaku" ${r.withHeigaku ? 'checked' : ''}> ${evalMode ? '兵学の改善案も出してもらう（S2以降）' : '兵学の割り当ても提案してもらう（S2以降）'}</label>` : ''}
       <div style="height:6px"></div>
       <button class="btn primary" id="rGen">プロンプトを作成</button>
     </div>
@@ -961,6 +1016,21 @@ function renderRequest(v) {
     });
     v.querySelectorAll('[data-fxdel]').forEach((b) => { b.onclick = () => { fixedSquads().splice(+b.dataset.fxdel, 1); saveReq(); renderRequest(v); }; });
     $('#fxAdd').onclick = () => { fixedSquads().push(['', '', '']); saveReq(); renderRequest(v); };
+  } else if (evalMode) {
+    v.querySelectorAll('[data-ev]').forEach((el) => {
+      const [i, j, key] = el.dataset.ev.split('-');
+      const apply = () => {
+        const slot = evalSquads()[+i][+j];
+        slot[key] = el.value;
+        if (key === 'sys') slot.ki = ''; // 系統を変えたら奇を選び直す
+        saveReq();
+      };
+      if (el.tagName === 'INPUT') el.oninput = apply; // 兵学・正は入力中に再描画しない
+      else el.onchange = () => { apply(); renderRequest(v); };
+    });
+    v.querySelectorAll('[data-evdel]').forEach((b) => { b.onclick = () => { evalSquads().splice(+b.dataset.evdel, 1); saveReq(); renderRequest(v); }; });
+    $('#evAdd').onclick = () => { evalSquads().push([emptySlot(), emptySlot(), emptySlot()]); saveReq(); renderRequest(v); };
+    $('#rImprove').onchange = (e) => { r.evalImprove = e.target.checked; saveReq(); };
   } else {
     $('#sqMinus').onclick = () => { r.squads = Math.max(1, r.squads - 1); $('#sqVal').textContent = r.squads; saveReq(); };
     $('#sqPlus').onclick = () => { r.squads = Math.min(10, r.squads + 1); $('#sqVal').textContent = r.squads; saveReq(); };
@@ -1105,7 +1175,112 @@ function buildFixedPrompt() {
   return L.join('\n');
 }
 
+// 今の編成を評価してもらうプロンプト
+function heigakuText(s, withEffect) {
+  if (!s.sys && !s.ki && !s.sei) return '';
+  const ki = s.ki ? S.heigaku.find((h) => h.name === s.ki) : null;
+  const parts = [];
+  if (s.sys) parts.push(s.sys);
+  if (s.ki) parts.push(`奇 ${s.ki}${withEffect && ki ? '（' + ki.effect + '）' : ''}`);
+  if (s.sei) {
+    let sei = s.sei.trim();
+    if (withEffect) {
+      // 「剛力2 豪勇1」の各名前に効果を添える
+      sei = sei.split(/[\s、,]+/).filter(Boolean).map((w) => {
+        const h = S.heigaku.find((x) => w.startsWith(x.name));
+        return h ? `${w}（${h.effect}）` : w;
+      }).join(' ');
+    }
+    parts.push(`正 ${sei}`);
+  }
+  return parts.join(' / ');
+}
+function buildEvalPrompt() {
+  const r = S.req;
+  const own = ownedForReq();
+  const improve = r.evalImprove !== false;
+  const useHeigaku = r.withHeigaku && S.heigaku.length && reqSeasonNum() >= 2;
+  const squads = evalSquads().map((sq) => sq.filter((s) => S.nameIndex[s.name])).filter((sq) => sq.length);
+  const used = new Set(squads.flat().flatMap((s) => [s.name, s.t1, s.t2]).filter(Boolean));
+  const cond = [`- 目的: ${r.purpose}`, `- シーズン: ${r.season}`];
+  if (r.extra.trim()) cond.push(`- 補足: ${r.extra.trim()}`);
+  cond.push(...lateOwnedLine());
+  const ask = [
+    '部隊ごとに次を書いてください。',
+    '1. 総合評価（10点満点）と、ひとことでの位置づけ',
+    '2. 強み（噛み合っている戦法・兵学・特性の組み合わせ）',
+    '3. 弱み（足りない役割、兵種、発動条件を満たしていない戦法、重複・過剰な効果など）',
+    improve
+      ? `4. 改善案（手持ちの武将・伝授戦法${useHeigaku ? '・兵学' : ''}だけで入れ替えるなら何をどう変えるか。効果が大きい順に3つまで。他の部隊と武将・戦法が重複しないように）`
+      : '4. 改善の方向性（入れ替え先は問わない）',
+    '最後に、入手すると大きく強くなる武将・戦法があれば挙げてください。',
+  ];
+  const L = [];
+  if (r.mode === 'skill') {
+    L.push('shinsen-formation スキルを使って、下の信長の野望 真戦の編成を評価してください。');
+    L.push('', '## 条件', ...cond, '', '## 評価してほしい編成（()内は凸数）');
+    squads.forEach((sq, i) => {
+      L.push(`### 第${i + 1}部隊`);
+      sq.forEach((s, j) => {
+        const g = S.nameIndex[s.name];
+        const tac = [s.t1, s.t2].filter(Boolean).join(' ＋ ') || '（未設定）';
+        const hg = heigakuText(s, false);
+        L.push(`- ${SLOT_LABELS[j]} ${g.name}(${(S.owned.generals[g.slug] || {}).totsu || 0}): ${tac}${hg ? ' ／ 兵学: ' + hg : ''}`);
+      });
+    });
+    if (improve) {
+      L.push('', '## 手持ち（改善案に使ってよいもの）');
+      L.push(`- 武将: ${own.g.filter((g) => !used.has(g.name)).map((g) => `${g.name}(${S.owned.generals[g.slug].totsu || 0})`).join('、') || '（なし）'}`);
+      L.push(`- 伝授戦法: ${own.t.filter((t) => !used.has(t.name)).map((t) => t.name).join('、') || '（なし）'}`);
+      L.push('- 上の編成で使っている武将・戦法も、部隊の間で入れ替えてよい');
+    }
+    L.push('', '## 出力', ...ask);
+    return L.join('\n');
+  }
+  L.push('あなたは「信長の野望 真戦」の編成アドバイザーです。下の編成を評価してください。');
+  L.push('', '## 前提');
+  L.push('- 1部隊は武将3名（大将1＋副将2）。各武将は固有戦法1＋伝授戦法2');
+  L.push('- 役割は火力・補助・制御・回復。火力3枠以上、被ダメ減1〜2、回復1〜2（3以上は過剰になりやすい）が目安。敵3万兵力を削り切る火力が目標');
+  L.push('- 兵種相性: 足軽→騎兵→弓兵→鉄砲→足軽（矢印の先に強い）。部隊の兵種は3名の兵種ボーナスが揃うものが強い');
+  L.push('- 特性は凸数で解放済みのものだけ。陣形戦法や家門・勢力条件のある戦法は、発動条件を満たすか確認する');
+  if (S.heigaku.length) L.push('- 兵学（S2以降）: 各武将は4系統から1つを選び、兵学・奇を1つ、兵学・正に3点（1項目最大Lv2）を振る');
+  L.push('', '## 条件', ...cond);
+  squads.forEach((sq, i) => {
+    const gs = sq.map((s) => S.nameIndex[s.name]);
+    const cost = gs.reduce((a, g) => a + (+g.cost || 0), 0);
+    L.push('', `## 第${i + 1}部隊（合計COST ${cost}）`);
+    sq.forEach((s, j) => {
+      const g = S.nameIndex[s.name];
+      L.push(...generalBlock(g, false, SLOT_LABELS[j]));
+      for (const tn of [s.t1, s.t2]) {
+        if (!tn) continue;
+        const t = S.tacticIndex[tn];
+        L.push(`- 伝授戦法 ${tn}${t ? `（${t.rank}・${t.kind}）: ${t.effect}` : ''}`);
+      }
+      if (!s.t1 && !s.t2) L.push('- 伝授戦法: （未設定）');
+      const hg = heigakuText(s, true);
+      if (hg) L.push(`- 兵学: ${hg}`);
+    });
+  });
+  if (improve) {
+    const restG = own.g.filter((g) => !used.has(g.name));
+    const restT = own.t.filter((t) => !used.has(t.name));
+    L.push('', '## 改善案に使ってよい手持ち（上の編成にない分）');
+    L.push(`- 武将: ${restG.map((g) => `${g.name}（${g.faction}・COST${g.cost}・${g.troop}・${g.unique}）`).join('、') || '（なし）'}`);
+    L.push('', `### 伝授戦法（${restT.length}件）`);
+    for (const t of restT) L.push(`- ${t.name}（${t.rank}・${t.kind}）: ${t.effect}`);
+    L.push('- 上の編成で使っている武将・戦法も、部隊の間で入れ替えてよい');
+    if (useHeigaku) {
+      L.push('', '### 兵学の候補（武将ごとに選べる候補は異なる）');
+      for (const h of S.heigaku.filter((x) => seasonOk(x.debut, reqSeasonNum(), 'upto'))) L.push(`- ${h.system}/${h.kind} ${h.name}: ${h.effect}`);
+    }
+  }
+  L.push('', '## 出力', ...ask);
+  return L.join('\n');
+}
+
 function buildPrompt() {
+  if (S.req.kind === 'eval') return buildEvalPrompt();
   if (S.req.kind === 'fixed') return buildFixedPrompt();
   const r = S.req;
   const own = ownedForReq();
